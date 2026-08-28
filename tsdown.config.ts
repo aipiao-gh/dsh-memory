@@ -1,6 +1,7 @@
-// tsdown 配置：把 Host（lib）与 Client（dist/client.js）分别转译。
-// `prepare` 脚本在 git 安装时运行本配置，产出 */lib 与 dist/client.js，
-// 使 `dsh plugin add github:...` 无需用户额外的 build 权限。
+// tsdown 配置：只构建 Host 半（lib/）。
+// 注意：`dist/client.js` 是手写的「module-loader bundle」格式（镜像 dsh-notify），
+// 不走 tsdown——请直接编辑 dist/client.js，构建不会覆盖它。
+// 产物（lib/ 与 dist/）已提交进仓库，git 安装无需本地构建。
 import { defineConfig } from 'tsdown'
 
 export default defineConfig([
@@ -10,17 +11,7 @@ export default defineConfig([
     format: ['esm'],
     dts: true,
     sourcemap: false,
-    clean: true,
-    platform: 'node',
-  },
-  {
-    entry: ['src/client/index.tsx'],
-    outDir: 'dist',
-    format: ['esm'],
-    // 不产出 dts（客户端 bundle 运行时无类型需求）
-    dts: false,
-    sourcemap: false,
     clean: false,
-    // 客户端的 React 由 web 运行时提供，标记为外部 module-table 依赖
+    platform: 'node',
   },
 ])
