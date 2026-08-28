@@ -1,0 +1,5 @@
+# dsh-memory bundle —— 配置层（该包被 profile 列入 bundles 时应用的 patch）
+# 插件行用包名引用，DSH 从已安装的包解析代码。
+- insert:
+    - id: dsh-memory
+      name: dsh-memory
