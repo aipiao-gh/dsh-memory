@@ -32,7 +32,7 @@
     },
     "client": {
       "platform": "web",
-      "inject": ["memory"],
+      "inject": [],
       "external": ["react"],
       "immediately": false
     }

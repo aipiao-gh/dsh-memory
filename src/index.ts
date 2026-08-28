@@ -7,7 +7,7 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 
 export const name = 'dsh-memory'
-export const inject = ['llm', 'sessions', 'sessionQuery', 'commands', 'timer', 'fs']
+export const inject = ['llm', 'sessions', 'sessionQuery', 'commands', 'timer', 'fs', 'webServer']
 
 export const DEFAULTS = {
   enabled: true,
@@ -234,6 +234,10 @@ export async function apply(ctx: Context): Promise<void> {
   // 此处不得再 ctx.provide('memory', …)，否则重复注册报 "service already registered"。
   new MemoryProvider(ctx, core, ctx)
 
+  // Web 端 client 通过 /api/dsh-memory/* HTTP 路由访问（镜像 dsh-notify），
+  // 不依赖 client 注入 service。
+  registerWebRoutes(ctx, core)
+
   const shouldExtract = () => core.cfg.enabled && (core.cfg.memory.enabled || core.cfg.profile.enabled)
 
   // ---- 会话窗口写回 ----
@@ -396,6 +400,136 @@ export async function apply(ctx: Context): Promise<void> {
   // ---- 命令 ----
   ctx.commands.register({ name: 'memory', description: '查看和管理持久化记忆（list/show/add/edit/rm）', input: { hint: '/memory list --type basic_fact --keyword 学习' }, handler: async (inv: any) => ({ kind: 'success' as const, text: await runMemoryCommand(inv.rawInput, core) }) })
   ctx.commands.register({ name: 'profile', description: '查看和管理用户画像（show/edit）', input: { hint: '/profile show' }, handler: async (inv: any) => ({ kind: 'success' as const, text: await runProfileCommand(inv.rawInput, core) }) })
+}
+
+/* ----------------------------------------- /api/dsh-memory/* HTTP 路由 ---------- */
+function registerWebRoutes(ctx: Context, core: MemoryCore): void {
+  const wb = ctx.get('webServer') as any
+  if (!wb) return
+  const json = (res: any, obj: any, code = 200) => {
+    try {
+      const body = JSON.stringify(obj)
+      res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) })
+      res.end(body)
+    } catch { /* ignore */ }
+  }
+  const readBody = (req: any): Promise<string> => new Promise((resolve) => {
+    let data = ''
+    req.on('data', (chunk: Buffer) => { data += chunk })
+    req.on('end', () => resolve(data))
+    req.on('error', () => resolve(''))
+  })
+  const readJson = async (req: any): Promise<any> => { try { return JSON.parse(await readBody(req)) } catch { return {} } }
+
+  // 简单 GET 查询参数（memory.get 等）
+  const queryOf = (url: string): Record<string, string> => {
+    const out: Record<string, string> = {}
+    const q = (url || '').split('?')[1]
+    if (q) for (const kv of q.split('&')) { const i = kv.indexOf('='); if (i > 0) out[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1)) }
+    return out
+  }
+
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/list', handler: async (_req: any, res: any) => { await core.ensure(); json(res, { memories: core.listMemories(), profile: core.getProfile(), config: core.cfg, storeMode: core.storeMode, storeReady: core.storeReady, memCount: core.listMemories().length, debug: { ...core.debug } }) } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/get', handler: async (req: any, res: any) => { await core.ensure(); json(res, core.getMemory(queryOf((req as any).url).id || '') || null) } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/add', handler: async (req: any, res: any) => {
+    await core.ensure()
+    const input = await readJson(req)
+    const c = String((input && input.content) || '').trim()
+    if (!c) return json(res, { ok: false, error: 'empty-content' }, 400)
+    const category = Array.isArray(input && input.category) ? input.category : []
+    const source = String((input && input.source) || '').trim()
+    const hash = contentHash(c)
+    if (core.findMemoryByHash(hash)) return json(res, { ok: false, error: 'duplicate' })
+    await core.putMemory({ id: genId('mem'), type: 'basic_fact', content: c, category, confidence: 1, importance: 3, createdAt: now(), updatedAt: now(), lastRefAt: now(), sources: source ? [{ sessionId: source }] : [], status: 'active', pinned: false, manual: true, extractorVersion: 'manual', contentHash: hash, supersedes: [], conflictsWith: [], tags: category.slice(), revision: 1, updatedBy: 'user', note: '' })
+    json(res, { ok: true })
+  } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/edit', handler: async (req: any, res: any) => {
+    await core.ensure()
+    const input = await readJson(req)
+    const m = core.getMemory(String((input && input.id) || ''))
+    if (!m) return json(res, { ok: false, error: 'not-found' })
+    const updated: any = Object.assign({}, m)
+    if (typeof input.content === 'string') { updated.content = input.content; updated.contentHash = contentHash(input.content) }
+    if (Array.isArray(input.category)) updated.category = input.category
+    if (typeof input.importance === 'number') updated.importance = Math.max(1, Math.min(5, Math.round(input.importance)))
+    if (typeof input.source === 'string') updated.sources = input.source.trim() ? [{ sessionId: input.source.trim() }] : []
+    if (typeof input.note === 'string') updated.note = input.note
+    updated.updatedAt = now(); updated.revision = (m.revision || 1) + 1; updated.updatedBy = 'user'
+    await core.putMemory(updated)
+    json(res, { ok: true, memory: updated })
+  } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/rm', handler: async (req: any, res: any) => {
+    await core.ensure()
+    const input = await readJson(req)
+    const id = String((input && input.id) || ''); const purge = !!(input && input.purge)
+    const m = core.getMemory(id)
+    if (!m) return json(res, { ok: false, error: 'not-found' })
+    if (purge) { await core.deleteMemory(id); return json(res, { ok: true, purged: true }) }
+    await core.putMemory(Object.assign({}, m, { status: 'trashed', updatedAt: now() }))
+    json(res, { ok: true, purged: false })
+  } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/restore', handler: async (req: any, res: any) => {
+    await core.ensure()
+    const input = await readJson(req)
+    const m = core.getMemory(String((input && input.id) || ''))
+    if (!m) return json(res, { ok: false, error: 'not-found' })
+    await core.putMemory(Object.assign({}, m, { status: 'active', updatedAt: now() }))
+    json(res, { ok: true })
+  } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/pin', handler: async (req: any, res: any) => {
+    await core.ensure()
+    const input = await readJson(req)
+    const m = core.getMemory(String((input && input.id) || ''))
+    if (!m) return json(res, { ok: false, error: 'not-found' })
+    await core.putMemory(Object.assign({}, m, { pinned: !!(input && input.pinned), updatedAt: now(), revision: (m.revision || 1) + 1, updatedBy: 'user' }))
+    json(res, { ok: true })
+  } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/review', handler: async (req: any, res: any) => {
+    await core.ensure()
+    const input = await readJson(req)
+    const m = core.getMemory(String((input && input.id) || ''))
+    if (!m) return json(res, { ok: false, error: 'not-found' })
+    const nextMem: any = Object.assign({}, m)
+    if (input && input.accept) { nextMem.status = 'active'; if (Array.isArray(m.supersedes) && m.supersedes.length) for (const oldId of m.supersedes) { const old = core.getMemory(oldId); if (old) await core.putMemory(Object.assign({}, old, { status: 'trashed', updatedAt: now() })) }; nextMem.conflictsWith = [] }
+    else nextMem.status = 'trashed'
+    nextMem.updatedAt = now(); nextMem.revision = (m.revision || 1) + 1; nextMem.updatedBy = 'user'
+    await core.putMemory(nextMem)
+    json(res, { ok: true })
+  } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/profile/get', handler: async (_req: any, res: any) => { await core.ensure(); json(res, { profile: core.getProfile() }) } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/profile/set', handler: async (req: any, res: any) => {
+    await core.ensure()
+    const input = await readJson(req)
+    const next: any = Object.assign({}, core.getProfile())
+    const patch = input && input.patch
+    if (patch && typeof patch === 'object') {
+      if (patch.basicInfo && typeof patch.basicInfo === 'object') next.basicInfo = patch.basicInfo
+      if (Array.isArray(patch.personality)) next.personality = patch.personality
+      if (patch.preferences && typeof patch.preferences === 'object') next.preferences = patch.preferences
+      if (Array.isArray(patch.unlikes)) next.unlikes = patch.unlikes
+      if (typeof patch.currentFocus === 'string') next.currentFocus = patch.currentFocus
+      if (patch.override && typeof patch.override === 'object') next.override = patch.override
+      next.revision = (next.revision || 1) + 1
+    }
+    await core.saveProfile(next)
+    json(res, { ok: true, profile: next })
+  } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/config/get', handler: async (_req: any, res: any) => { await core.ensure(); json(res, { config: core.cfg }) } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/config/set', handler: async (req: any, res: any) => {
+    await core.ensure()
+    const input = await readJson(req)
+    if (input && input.config && typeof input.config === 'object') await core.saveConfig(input.config)
+    json(res, { ok: true, config: core.cfg })
+  } })
+  wb.register({ kind: 'exact', path: '/api/dsh-memory/models', handler: async (_req: any, res: any) => {
+    await core.ensure()
+    const providers: any[] = []
+    try {
+      const list = (ctx as any).llm ? (ctx as any).llm.listProviders() : []
+      for (const p of list || []) { let models: any[] = []; try { const ms = await (ctx as any).llm.listModels(p.id); models = (ms || []).map((m2: any) => ({ id: m2.id, name: m2.name || m2.id })) } catch {}; providers.push({ id: p.id, name: p.name || p.id, models }) }
+    } catch {}
+    json(res, { providers })
+  } })
 }
 
 async function runMemoryCommand(line: string, core: MemoryCore) {

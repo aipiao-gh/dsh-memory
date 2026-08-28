@@ -1,7 +1,8 @@
 // dsh-memory — client half (web module-loader bundle).
 // Format mirrors dsh-notify's lib/client.js: window.__ModuleLoader__.load({id, factory}),
 // requires only "react" from the module table, registers a settings.section page.
-// Talks to the host half through the injected `memory` Service (dsh.client.inject).
+// Talks to the host half through the HTTP routes /api/dsh-memory/* registered by the
+// host half on the web server (see registerWebRoutes in src/index.ts).
 window.__ModuleLoader__.load({
   id: "dsh-memory",
   factory: (require) => {
@@ -10,6 +11,13 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const { useEffect, useState } = React;
     const h = React.createElement;
+
+    // ---------- API bridge (host half serves /api/dsh-memory/*) ----------
+    function api(path, method, body) {
+      const opts = { method: method || "GET", headers: {} };
+      if (body !== undefined) { opts.headers["content-type"] = "application/json"; opts.body = JSON.stringify(body); }
+      return fetch("/api/dsh-memory" + path, opts).then((r) => r.json().catch(() => null));
+    }
 
     // ---------- helpers ----------
     function fmtTime(ts) { if (!ts) return "无效"; return new Date(ts).toLocaleString(); }
@@ -23,7 +31,7 @@ window.__ModuleLoader__.load({
     function textToList(text) { return String(text || "").split(",").map((s) => s.trim()).filter(Boolean); }
 
     // ---------- ProfileView ----------
-    function ProfileView({ profile, memory }) {
+    function ProfileView({ profile }) {
       const [editing, setEditing] = useState(false);
       const [basicText, setBasicText] = useState(""); const [prefText, setPrefText] = useState("");
       const [personalityText, setPersonalityText] = useState(""); const [unlikesText, setUnlikesText] = useState("");
@@ -39,7 +47,7 @@ window.__ModuleLoader__.load({
       const save = async () => {
         const patch = { basicInfo: kvToObj(basicText), preferences: kvToObj(prefText), personality: textToList(personalityText), unlikes: textToList(unlikesText), currentFocus: focusText.trim(), override: kvToObj(overrideText) };
         try {
-          const r = await memory.setProfile({ patch });
+          const r = await api("/profile/set", "POST", { patch });
           if (r && r.ok) { setSaveKind("ok"); setSaveMsg("画像已保存"); setEditing(false); }
           else { setSaveKind("err"); setSaveMsg("保存失败：" + ((r && r.error) || "unknown")); }
         } catch (e) { setSaveKind("err"); setSaveMsg("保存出错：" + String(e && e.message || e)); }
@@ -71,7 +79,7 @@ window.__ModuleLoader__.load({
     }
 
     // ---------- MemoryView ----------
-    function MemoryView({ memory }) {
+    function MemoryView() {
       const [data, setData] = useState(null);
       const [filter, setFilter] = useState("active");
       const [kw, setKw] = useState("");
@@ -80,17 +88,17 @@ window.__ModuleLoader__.load({
       const [cfgDraft, setCfgDraft] = useState(null);
       const [cfgMsg, setCfgMsg] = useState("");
 
-      const load = () => memory.list().then((r) => { setData(r); if (r.config && !cfgDraft) setCfgDraft(JSON.parse(JSON.stringify(r.config))); }).catch(() => setData({ memories: [] }));
+      const load = () => api("/list").then((r) => { setData(r); if (r.config && !cfgDraft) setCfgDraft(JSON.parse(JSON.stringify(r.config))); }).catch(() => setData({ memories: [] }));
       useEffect(() => { load(); }, []);
       const flash = (t, k) => { setMsg(t); setMsgKind(k || "ok"); };
       const add = async () => {
         if (!text.trim()) { flash("内容不能为空", "err"); return; }
-        const r = await memory.add({ content: text.trim(), source: srcText.trim() });
+        const r = await api("/add", "POST", { content: text.trim(), source: srcText.trim() });
         if (r && r.ok) { flash("已添加记忆"); setText(""); setSrcText(""); load(); }
         else flash("添加失败：" + ((r && r.error) || "unknown"), "err");
       };
       const act = async (fn, okMsg) => { const r = await fn(); if (r && r.ok === false) flash("操作失败：" + (r.error || "unknown"), "err"); else flash(okMsg, "ok"); load(); };
-      const saveCfg = async () => { const r = await memory.setConfig({ config: cfgDraft }); if (r && r.ok) { setCfgMsg("设置已保存"); load(); } else setCfgMsg("保存失败"); };
+      const saveCfg = async () => { const r = await api("/config/set", "POST", { config: cfgDraft }); if (r && r.ok) { setCfgMsg("设置已保存"); load(); } else setCfgMsg("保存失败"); };
 
       if (!data) return h("div", null, "加载记忆…");
       const all = data.memories || [];
@@ -104,11 +112,11 @@ window.__ModuleLoader__.load({
         h("div", null, m.content),
         h("div", { className: "dshm-hint" }, "来源：" + fmtSources(m.sources)),
         h("div", { className: "dshm-row" },
-          h("button", { onClick: () => act(() => memory.pin({ id: m.id, pinned: !m.pinned }), "已更新固定") }, m.pinned ? "取消固定" : "固定"),
+          h("button", { onClick: () => act(() => api("/pin", "POST", { id: m.id, pinned: !m.pinned }), "已更新固定") }, m.pinned ? "取消固定" : "固定"),
           m.status === "trashed"
-            ? h("button", { onClick: () => act(() => memory.restore(m.id), "已恢复") }, "恢复")
-            : h("button", { onClick: () => act(() => memory.rm({ id: m.id }), "已删除") }, "删除"),
-          m.status === "trashed" ? h("button", { onClick: () => act(() => memory.rm({ id: m.id, purge: true }), "已彻底删除") }, "彻底删除") : null)));
+            ? h("button", { onClick: () => act(() => api("/restore", "POST", { id: m.id }), "已恢复") }, "恢复")
+            : h("button", { onClick: () => act(() => api("/rm", "POST", { id: m.id }), "已删除") }, "删除"),
+          m.status === "trashed" ? h("button", { onClick: () => act(() => api("/rm", "POST", { id: m.id, purge: true }), "已彻底删除") }, "彻底删除") : null)));
 
       const memoryBlock = h("details", { open: true },
         h("summary", null, "记忆（共 " + all.length + " 条 · active " + activeCount + " 条）"),
@@ -137,7 +145,7 @@ window.__ModuleLoader__.load({
         h("h3", null, "记忆管理"),
         h("div", { className: "dshm-hint" }, "存储：" + (data.storeMode || "?") + (data.storeReady ? "" : " (未就绪)") + " · 记忆 " + (data.memCount != null ? data.memCount : all.length) + " 条 · 注入：baseline" + (dbg.baselineCalls || 0) + "/" + (dbg.baselineEmit || 0) + " · recall" + (dbg.recallCalls || 0) + "/" + (dbg.recallInjected || 0)),
         memoryBlock,
-        h(ProfileView, { profile: data.profile || null, memory }),
+        h(ProfileView, { profile: data.profile || null }),
         settingsBlock);
     }
 
@@ -147,7 +155,7 @@ window.__ModuleLoader__.load({
       if (!slots) return;
       slots.inject("settings.section", () => slots.register(
         { name: "settings.section", id: "dsh-memory", order: 95, label: "记忆管理" },
-        () => h(MemoryView, { memory: ctx.memory })));
+        () => h(MemoryView, null)));
     }
 
     exports.name = "dsh-memory";
