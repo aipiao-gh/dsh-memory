@@ -4,28 +4,23 @@
   "description": "DSH 持久化记忆插件：用户画像 + 记忆抽取队列 + 基线注入/回合召回 + 记忆/画像管理 Web 页。",
   "type": "module",
   "main": "./lib/index.js",
-  "types": "./lib/types/index.d.ts",
   "license": "MIT",
   "scripts": {
-    "build": "tsdown",
-    "prepare": "tsdown"
+    "build": "tsdown"
   },
   "files": [
     "lib",
     "dist",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "README.md"
   ],
   "exports": {
     ".": {
-      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
     "./client": {
       "default": "./dist/client.js"
     }
-  },
-  "dependencies": {
-    "@deepseek-ai/schemastery": "*"
   },
   "devDependencies": {
     "tsdown": "*",

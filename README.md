@@ -24,7 +24,7 @@ DSH（DeepSeek Harness）**持久化记忆插件**（`dsh.bundle`）。为 agent
 
 > 前置：本机已装 `dsh` CLI（`dsh --version` 可查），并有 `web` profile。
 
-### 方式 1：使用git clone（推荐）
+### 方式 1：git clone 后本机安装（推荐）
 
 ```sh
 # 克隆仓库
@@ -41,34 +41,61 @@ pnpm run prepare        # 即 pnpm run build（用 tsdown 转译 Host 与 Client
 cd ../..
 dsh plugin --profile web add ./packages/dsh-memory
 
-#    若上面这一步因"运行 prepare 被 pnpm 拒绝"而失败，先放行再重跑：
-#    a) 打开该 profile 的配置文件。web profile 通常位于
-#       ~/.dsh/profiles/web/，找到（或新建）pnpm-workspace.yaml，写入：
-#          allowBuilds:
-#            dsh-memory: true
-#    b) 重新执行上一条 add 命令
-
-#  重启 dsh
+# 重启 dsh
+dsh --profile web
 ```
 
-- 若启动后「记忆管理」没出现：先**硬刷新浏览器**（Ctrl+Shift+R）；仍无则确认第 2 步 `add` 成功、且 `packages/dsh-memory/dist/client.js` 已生成。
+- 本机安装**通常不需要**改动 pnpm-workspace.yaml（`prepare` 已在本机跑过了）。
+- 若仍遇到“运行 prepare 被 pnpm 拒绝”，参照下方「放行构建脚本」处理。
+- 若启动后「记忆管理」没出现：先**硬刷新浏览器**（Ctrl+Shift+R）；仍无则确认上面 `add` 成功、且 `packages/dsh-memory/dist/client.js` 已生成。
 - 卸载：`dsh plugin --profile web remove dsh-memory`。
 
-### 方式 2：使用 pnpm 安装
+### 方式 2：GitHub 直接安装
 
 ```sh
-# 注意：pnpm≥10 默认拒绝运行 git 依赖的构建脚本,所以首次 add 会失败，必须先把放行。
-# 在目标 profile 的 pnpm-workspace.yaml 写入：
-#      allowBuilds:
-#        dsh-memory: true
+# 先放行构建（见下方「放行构建脚本」），再安装：
 dsh plugin --profile web add github:aipiao-gh/dsh-memory
-# 重启 dsh 并验证，同方式 A 的 3/4。
+
+# 重启 dsh 并验证，同方式 1。
 ```
 
-- **免放行的替代**（都带预编译产物，无需 allowBuilds）：
-  - `pnpm pack` 后：`dsh plugin --profile web add ./dsh-memory-0.2.0.tgz`
-  - 发布到 npm 后：`dsh plugin --profile web add dsh-memory`
-- 安装有多套 profile（如 tui）时，把 `--profile web` 换成对应 profile 名即可。
+> 注意：pnpm≥10 默认拒绝运行 git 依赖的构建脚本，**首次 `add` 会失败**并打印类似
+> `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED … not in the "allowBuilds" allowlist` 的信息。
+> 这是预期，按下方「放行构建脚本」处理后再重跑即可。
+
+### 放行构建脚本（仅 git 安装需要用）
+
+当 `dsh plugin ... add github:...` 报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` / `Failed to prepare git-hosted package` 时：
+
+1. **定位文件**：`web` profile 的 pnpm 配置路径是
+   ```
+   .dsh/profiles/web/pnpm-workspace.yaml
+   ```
+  （若你的 `DSH_HOME` 不是 `/home/aipiao/.dsh`，用 `echo $DSH_HOME` 替换前缀；`tui` 等 profile 把文件名里 `web` 换成对应名字。）
+
+2. **追加而非替换**：文件里通常已有 `allowBuilds:` 段，把 **pnpm 报错信息里打印的那一行**（含完整 key 与 commit 哈希，例如
+   `dsh-memory@git+ssh://git@github.com/aipiao-gh/dsh-memory.git#a1d49fd…: true`）追加进去，变成：
+
+   ```yaml
+   allowBuilds:
+     cloudflared: true
+     cpu-features: true
+     ssh2: true
+     node-pty: true
+     dsh-memory@git+ssh://git@github.com/aipiao-gh/dsh-memory.git#a1d49fd…: true
+   ```
+
+   ⚠️ key 必须是**报错原文**里的那整串（已含 commit 哈希）。只写 `dsh-memory: true` 匹配不到这个 git 依赖。
+
+3. **重跑**同一条 `dsh plugin --profile web add github:aipiao-gh/dsh-memory`。
+
+> 因为 key 含 commit 哈希，**每次 push 换 commit 都要重新加一次 allowlist**。若不想每次处理：
+> - 用 tarball：在本包 `cd packages/dsh-memory && pnpm pack` → `dsh plugin --profile web add ./dsh-memory-0.2.0.tgz`（免放行）；
+> - 或发布到 npm 后 `dsh plugin --profile web add dsh-memory`（免放行）。
+
+### 多 profile
+
+安装有多套 profile（如 `tui`）时，把 `--profile web` 换成对应 profile 名即可；对应的 `pnpm-workspace.yaml` 也在 `$DSH_HOME/profiles/<名字>/` 下。
 
 ---
 
@@ -171,4 +198,3 @@ dsh-memory/
 - Host：`export const inject` + `export async function apply(ctx)`，暴露 `memory` Service。
 - Client：`dsh.client`（`platform:"web"`, `inject:["memory"]`, `external:["react"]`）→ `exports["./client"]` = `dist/client.js`。
 - Client 视图 `import React`，已在 `package.json.dsh.client.external` 声明 `["react"]` 走 web 运行时模块表基线。
-- 
