@@ -149,8 +149,34 @@ window.__ModuleLoader__.load({
         settingsBlock);
     }
 
+    // ---------- styles ----------
+    function injectCss() {
+      if (typeof document === "undefined") return;
+      if (document.querySelector("style[data-dsh-memory-css]")) return;
+      const tag = document.createElement("style");
+      tag.setAttribute("data-dsh-memory-css", "1");
+      tag.textContent = [
+        ".dshm-root { font-family: inherit; color: var(--dsw-alias-text-primary, inherit); }",
+        ".dshm-body { display: flex; flex-direction: column; gap: 8px; padding: 8px 0 4px; }",
+        ".dshm-card { border: 1px solid var(--dsw-alias-border-l2, #bbb); border-radius: 8px; padding: 10px 12px; background: var(--dsw-alias-bg-base, #fff); }",
+        ".dshm-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }",
+        ".dshm-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 10px; background: var(--dsw-alias-interactive-bg-hover, #eef0f3); color: var(--dsw-alias-label-secondary, #333); }",
+        ".dshm-hint { font-size: 12px; color: var(--dsw-alias-label-tertiary, #666); line-height: 1.5; }",
+        ".dshm-ok { font-size: 12px; font-weight: 700; color: #1a9e4b; }",
+        ".dshm-err { font-size: 12px; font-weight: 700; color: var(--dsw-alias-label-error, #d43); }",
+        ".dshm-root h3 { margin: 0 0 8px; }",
+        ".dshm-root details summary { cursor: pointer; font-weight: 700; padding: 2px 0; }",
+        ".dshm-root label { font-size: 13px; font-weight: 600; }",
+        ".dshm-root input, .dshm-root textarea, .dshm-root select { font-family: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid var(--dsw-alias-border-l2, #999); border-radius: 6px; background: var(--dsw-alias-bg-base, #fff); color: var(--dsw-alias-text-primary, #000); box-sizing: border-box; }",
+        ".dshm-root button { font-family: inherit; font-size: 13px; font-weight: 700; padding: 5px 12px; border: 1px solid var(--dsw-alias-border-l3, #999); border-radius: 6px; background: var(--dsw-alias-bg-base, #fff); color: var(--dsw-alias-text-primary, #000); cursor: pointer; }",
+        ".dshm-root button:hover { border-color: var(--dsw-alias-brand-primary, #4f8cff); }",
+      ].join("\n");
+      document.head.appendChild(tag);
+    }
+
     // ---------- apply ----------
     function apply(ctx) {
+      injectCss();
       const slots = ctx.get && ctx.get("slots");
       if (!slots) return;
       slots.inject("settings.section", () => slots.register(
