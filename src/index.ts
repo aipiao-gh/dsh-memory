@@ -230,7 +230,9 @@ export async function apply(ctx: Context): Promise<void> {
   const core = new MemoryCore(ctx)
   await core.init()
   await core.loadConfig()
-  ctx.provide('memory', new MemoryProvider(ctx, core, ctx))
+  // MemoryProvider extends Service，构造函数 super(ctx,'memory') 已完成注册，
+  // 此处不得再 ctx.provide('memory', …)，否则重复注册报 "service already registered"。
+  new MemoryProvider(ctx, core, ctx)
 
   const shouldExtract = () => core.cfg.enabled && (core.cfg.memory.enabled || core.cfg.profile.enabled)
 
